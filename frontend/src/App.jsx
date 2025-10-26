@@ -1,33 +1,40 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FileText, MessageSquare, Sparkles, RefreshCw } from 'lucide-react';
+import { FileText, MessageSquare, Sparkles, RefreshCw, LogOut, User } from 'lucide-react';
 import UploadZone from './components/UploadZone';
 import DocumentCard from './components/DocumentCard';
 import ChatInterface from './components/ChatInterface';
 import DocumentDashboard from './components/DocumentDashboard';
+import LoginPage from './components/LoginPage';
+import SignupPage from './components/SignupPage';
+import { useAuth } from './contexts/AuthContext';
 import { listDocuments, deleteDocument, askQuestion } from './lib/api';
 
 function App() {
+  const { user, loading, login, signup, logout, isAuthenticated } = useAuth();
   const [documents, setDocuments] = useState([]);
   const [selectedDocuments, setSelectedDocuments] = useState([]);
   const [activeTab, setActiveTab] = useState('upload'); // 'upload' or 'chat'
-  const [loading, setLoading] = useState(true);
   const [showToast, setShowToast] = useState(null);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
 
   useEffect(() => {
-    loadDocuments();
-  }, []);
+    if (isAuthenticated) {
+      loadDocuments();
+    }
+  }, [isAuthenticated]);
 
   const loadDocuments = async () => {
     try {
-      setLoading(true);
+      setDocumentsLoading(true);
       const docs = await listDocuments();
       setDocuments(docs);
     } catch (error) {
       console.error('Failed to load documents:', error);
       showToastMessage('Failed to load documents', 'error');
     } finally {
-      setLoading(false);
+      setDocumentsLoading(false);
     }
   };
 
@@ -63,6 +70,25 @@ function App() {
         return [...prev, doc];
       }
     });
+  };
+
+  const handleChatWithDocument = (doc) => {
+    setSelectedDocuments([doc]);
+    setActiveTab('chat');
+  };
+
+  const handleLogin = async (token) => {
+    const success = await login(token);
+    if (success) {
+      showToastMessage('Welcome back!', 'success');
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    setDocuments([]);
+    setSelectedDocuments([]);
+    showToastMessage('Logged out successfully', 'success');
   };
 
   const handleAsk = async (question, docIds, history) => {
@@ -129,25 +155,78 @@ function App() {
               </div>
             </motion.div>
 
-            <motion.button
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={loadDocuments}
-              disabled={loading}
-              className="p-3 rounded-xl glass hover:border-primary/50 border border-transparent 
-                       transition-all disabled:opacity-50"
-            >
-              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-            </motion.button>
+            <div className="flex items-center gap-3">
+              {/* Refresh Button */}
+              <motion.button
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={loadDocuments}
+                disabled={documentsLoading}
+                className="p-3 rounded-xl glass hover:border-primary/50 border border-transparent 
+                         transition-all disabled:opacity-50"
+              >
+                <RefreshCw className={`w-5 h-5 ${documentsLoading ? 'animate-spin' : ''}`} />
+              </motion.button>
+
+              {/* User Info */}
+              <div className="flex items-center gap-3 glass rounded-xl px-4 py-2">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary to-secondary 
+                              flex items-center justify-center">
+                  <User className="w-4 h-4 text-white" />
+                </div>
+                <div className="text-sm">
+                  <p className="font-medium text-white">{user?.full_name}</p>
+                  <p className="text-gray-400">{user?.email}</p>
+                </div>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleLogout}
+                  className="p-2 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 
+                           transition-colors"
+                  title="Logout"
+                >
+                  <LogOut className="w-4 h-4" />
+                </motion.button>
+              </div>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="relative max-w-7xl mx-auto px-6 py-8">
-        {/* Tab Navigation */}
+        {/* Show loading spinner while checking authentication */}
+        {loading && (
+          <div className="flex items-center justify-center h-64">
+            <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+          </div>
+        )}
+
+        {/* Show authentication pages if not authenticated */}
+        {!loading && !isAuthenticated && (
+          <AnimatePresence mode="wait">
+            {authMode === 'login' ? (
+              <LoginPage
+                key="login"
+                onLogin={handleLogin}
+                onSwitchToSignup={() => setAuthMode('signup')}
+              />
+            ) : (
+              <SignupPage
+                key="signup"
+                onSwitchToLogin={() => setAuthMode('login')}
+              />
+            )}
+          </AnimatePresence>
+        )}
+
+        {/* Show main app if authenticated */}
+        {!loading && isAuthenticated && (
+          <>
+            {/* Tab Navigation */}
         <div className="flex gap-4 mb-8">
           <motion.button
             whileHover={{ scale: 1.02 }}
@@ -243,6 +322,7 @@ function App() {
                             document={doc}
                             onDelete={handleDeleteDocument}
                             onSelect={handleSelectDocument}
+                            onChat={handleChatWithDocument}
                             isSelected={selectedDocuments.some(d => d.doc_id === doc.doc_id)}
                           />
                         ))}
@@ -317,11 +397,14 @@ function App() {
                 <ChatInterface
                   selectedDocuments={selectedDocuments}
                   onAsk={handleAsk}
+                  onNavigateToUploads={() => setActiveTab('upload')}
                 />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
+          </>
+        )}
       </main>
 
       {/* Footer */}

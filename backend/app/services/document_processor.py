@@ -13,28 +13,49 @@ class DocumentProcessor:
         
     def extract_text_from_pdf(self, file_path: str) -> Tuple[str, int, List[Dict]]:
         """Extract text from PDF with accurate page information"""
-        doc = fitz.open(file_path)
-        full_text = ""
-        page_texts = []
-        
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text = page.get_text()
+        try:
+            doc = fitz.open(file_path)
+            full_text = ""
+            page_texts = []
             
-            # Clean up text
-            text = text.strip()
+            print(f"DEBUG: PDF has {len(doc)} pages")
             
-            if text:  # Only add non-empty pages
-                page_texts.append({
-                    "page_number": page_num + 1,
-                    "text": text,
-                    "char_start": len(full_text),
-                    "char_end": len(full_text) + len(text)
-                })
-                full_text += f"\n{text}\n"
-        
-        doc.close()
-        return full_text, len(page_texts), page_texts
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                print(f"DEBUG: Page {page_num + 1} - Text length: {len(text)}")
+                
+                # Clean up text
+                text = text.strip()
+                
+                if text:  # Only add non-empty pages
+                    page_texts.append({
+                        "page_number": page_num + 1,
+                        "text": text,
+                        "char_start": len(full_text),
+                        "char_end": len(full_text) + len(text)
+                    })
+                    full_text += f"\n{text}\n"
+                else:
+                    print(f"DEBUG: Page {page_num + 1} is empty or contains no extractable text")
+            
+            doc.close()
+            
+            if not page_texts:
+                print("WARNING: No text could be extracted from PDF. This might be a scanned document.")
+                # Try to get at least some basic info
+                doc = fitz.open(file_path)
+                page_count = len(doc)
+                doc.close()
+                return "", page_count, []
+            
+            print(f"DEBUG: Successfully extracted text from {len(page_texts)} pages")
+            return full_text, len(page_texts), page_texts
+            
+        except Exception as e:
+            print(f"ERROR: Failed to extract text from PDF: {e}")
+            raise Exception(f"Failed to extract text from PDF: {str(e)}")
     
     def extract_text_from_txt(self, file_path: str) -> Tuple[str, int, List[Dict]]:
         """Extract text from TXT file"""
@@ -164,41 +185,55 @@ class DocumentProcessor:
     
     async def process_document(self, file_path: str, filename: str) -> Dict:
         """Main processing pipeline"""
-        doc_id = str(uuid.uuid4())
-        
-        # Extract text based on file type
-        if filename.endswith('.pdf'):
-            full_text, total_pages, page_texts = self.extract_text_from_pdf(file_path)
-        else:
-            full_text, total_pages, page_texts = self.extract_text_from_txt(file_path)
-        
-        # Chunk the text with accurate page tracking
-        chunks = self.chunk_text(full_text, page_texts)
-        
-        print(f"Processed {filename}: {total_pages} pages, {len(chunks)} chunks")
-        
-        # Debug: Print first few chunks with their page numbers
-        for chunk in chunks[:5]:
-            print(f"Chunk {chunk['chunk_id']}: Page {chunk['page_number']}")
-        
-        # Generate metadata
-        summary = self.generate_summary(full_text)
-        key_topics = self.extract_key_topics(full_text)
-        complexity = self.calculate_complexity_score(full_text)
-        reading_time = self.estimate_reading_time(full_text)
-        
-        return {
-            "doc_id": doc_id,
-            "filename": filename,
-            "full_text": full_text,
-            "chunks": chunks,
-            "total_pages": total_pages,
-            "page_texts": page_texts,
-            "metadata": {
-                "summary": summary,
-                "key_topics": key_topics,
-                "complexity_score": complexity,
-                "estimated_reading_time": reading_time,
-                "total_chunks": len(chunks)
+        try:
+            doc_id = str(uuid.uuid4())
+            
+            print(f"DEBUG: Processing {filename}")
+            
+            # Extract text based on file type
+            if filename.endswith('.pdf'):
+                full_text, total_pages, page_texts = self.extract_text_from_pdf(file_path)
+            else:
+                full_text, total_pages, page_texts = self.extract_text_from_txt(file_path)
+            
+            # Check if we got any text
+            if not full_text.strip():
+                raise Exception(f"No text could be extracted from {filename}. This might be a scanned PDF or corrupted file.")
+            
+            # Chunk the text with accurate page tracking
+            chunks = self.chunk_text(full_text, page_texts)
+            
+            if not chunks:
+                raise Exception(f"No chunks could be created from {filename}. The document might be too short or contain no meaningful text.")
+            
+            print(f"Processed {filename}: {total_pages} pages, {len(chunks)} chunks")
+            
+            # Debug: Print first few chunks with their page numbers
+            for chunk in chunks[:5]:
+                print(f"Chunk {chunk['chunk_id']}: Page {chunk['page_number']}")
+            
+            # Generate metadata
+            summary = self.generate_summary(full_text)
+            key_topics = self.extract_key_topics(full_text)
+            complexity = self.calculate_complexity_score(full_text)
+            reading_time = self.estimate_reading_time(full_text)
+            
+            return {
+                "doc_id": doc_id,
+                "filename": filename,
+                "full_text": full_text,
+                "chunks": chunks,
+                "total_pages": total_pages,
+                "page_texts": page_texts,
+                "metadata": {
+                    "summary": summary,
+                    "key_topics": key_topics,
+                    "complexity_score": complexity,
+                    "estimated_reading_time": reading_time,
+                    "total_chunks": len(chunks)
+                }
             }
-        }
+            
+        except Exception as e:
+            print(f"ERROR: Failed to process {filename}: {e}")
+            raise Exception(f"Failed to process document {filename}: {str(e)}")

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Loader, User, Bot, Copy, Check, ExternalLink } from 'lucide-react';
+import { Send, Loader, User, Bot, Copy, Check, ExternalLink, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
-const ChatInterface = ({ selectedDocuments, onAsk }) => {
+const ChatInterface = ({ selectedDocuments, onAsk, onNavigateToUploads }) => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,6 +25,34 @@ const ChatInterface = ({ selectedDocuments, onAsk }) => {
       loadSuggestions();
     }
   }, [selectedDocuments]);
+
+  // Load chat history when documents change
+  useEffect(() => {
+    if (selectedDocuments.length > 0) {
+      const docIds = selectedDocuments.map(doc => doc.doc_id).sort().join(',');
+      const savedHistory = localStorage.getItem(`chat_history_${docIds}`);
+      if (savedHistory) {
+        try {
+          const parsedHistory = JSON.parse(savedHistory);
+          setMessages(parsedHistory);
+        } catch (error) {
+          console.error('Failed to parse chat history:', error);
+        }
+      } else {
+        setMessages([]);
+      }
+    } else {
+      setMessages([]);
+    }
+  }, [selectedDocuments]);
+
+  // Save chat history whenever messages change
+  useEffect(() => {
+    if (selectedDocuments.length > 0 && messages.length > 0) {
+      const docIds = selectedDocuments.map(doc => doc.doc_id).sort().join(',');
+      localStorage.setItem(`chat_history_${docIds}`, JSON.stringify(messages));
+    }
+  }, [messages, selectedDocuments]);
 
   const loadSuggestions = async () => {
     try {
@@ -100,6 +128,16 @@ const ChatInterface = ({ selectedDocuments, onAsk }) => {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  const clearChatHistory = () => {
+    if (confirm('Are you sure you want to clear the chat history?')) {
+      setMessages([]);
+      if (selectedDocuments.length > 0) {
+        const docIds = selectedDocuments.map(doc => doc.doc_id).sort().join(',');
+        localStorage.removeItem(`chat_history_${docIds}`);
+      }
+    }
+  };
+
   if (selectedDocuments.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -113,11 +151,20 @@ const ChatInterface = ({ selectedDocuments, onAsk }) => {
             <Bot className="w-12 h-12 text-primary" />
           </motion.div>
           <h3 className="text-2xl font-bold mb-2 gradient-text">
-            Select a Document
+            No Documents Selected
           </h3>
-          <p className="text-gray-400">
-            Choose one or more documents to start asking questions
+          <p className="text-gray-400 mb-6">
+            Upload documents to start asking questions
           </p>
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={onNavigateToUploads}
+            className="px-6 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary 
+                     text-white font-semibold hover:shadow-lg hover:shadow-primary/50 transition-all"
+          >
+            Go to Documents
+          </motion.button>
         </div>
       </div>
     );
@@ -127,17 +174,33 @@ const ChatInterface = ({ selectedDocuments, onAsk }) => {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="glass rounded-t-xl p-4 border-b border-gray-800">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-secondary 
-                        flex items-center justify-center">
-            <Bot className="w-6 h-6 text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-secondary 
+                          flex items-center justify-center">
+              <Bot className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h3 className="font-semibold">AI Assistant</h3>
+              <p className="text-sm text-gray-400">
+                {selectedDocuments.length} document{selectedDocuments.length > 1 ? 's' : ''} selected
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-semibold">AI Assistant</h3>
-            <p className="text-sm text-gray-400">
-              {selectedDocuments.length} document{selectedDocuments.length > 1 ? 's' : ''} selected
-            </p>
-          </div>
+          
+          {/* Clear Chat Button */}
+          {messages.length > 0 && (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={clearChatHistory}
+              className="p-2 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 
+                       transition-colors"
+              title="Clear chat history"
+            >
+              <Trash2 className="w-5 h-5" />
+            </motion.button>
+          )}
         </div>
       </div>
 

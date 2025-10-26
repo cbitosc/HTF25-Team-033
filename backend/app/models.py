@@ -1,7 +1,32 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
+# Authentication Models
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class User(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    created_at: datetime
+    is_active: bool = True
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+# Existing Models
 class DocumentUploadResponse(BaseModel):
     doc_id: str
     filename: str
@@ -40,6 +65,8 @@ class DocumentMetadata(BaseModel):
     total_chunks: int
     summary: str
     key_topics: List[str]
+    estimated_reading_time: int
+    complexity_score: float
 
 class ComparisonRequest(BaseModel):
     doc_ids: List[str]

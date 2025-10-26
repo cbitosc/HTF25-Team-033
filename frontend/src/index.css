@@ -44,3 +44,46 @@
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, #00B8D4, #9C4FDB);
 }
+
+/* Code block scrollbar */
+.prose code::-webkit-scrollbar {
+  height: 6px;
+}
+
+.prose code::-webkit-scrollbar-track {
+  background: #1a1a2e;
+  border-radius: 3px;
+}
+
+.prose code::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #00D9FF, #B465FF);
+  border-radius: 3px;
+}
+
+/* Better prose styling */
+.prose {
+  @apply text-gray-200;
+}
+
+.prose h2 {
+  @apply scroll-mt-6;
+}
+
+.prose pre {
+  @apply !bg-transparent !p-0 !m-0;
+}
+
+/* Line clamp utilities */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

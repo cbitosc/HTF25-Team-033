@@ -1,8 +1,8 @@
 import { motion } from 'framer-motion';
-import { File, Calendar, Hash, Clock, Brain, Trash2, BarChart } from 'lucide-react';
+import { File, Calendar, Hash, Clock, Brain, Trash2, BarChart, MessageSquare } from 'lucide-react';
 import { useState } from 'react';
 
-const DocumentCard = ({ document, onDelete, onSelect, isSelected }) => {
+const DocumentCard = ({ document, onDelete, onSelect, isSelected, onChat }) => {
   const [showDetails, setShowDetails] = useState(false);
 
   const formatDate = (dateString) => {
@@ -61,17 +61,34 @@ const DocumentCard = ({ document, onDelete, onSelect, isSelected }) => {
           </div>
         </div>
 
-        {/* Delete Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(document.doc_id);
-          }}
-          className="p-2 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 
-                   transition-colors"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
+        {/* Action Buttons */}
+        <div className="flex gap-2">
+          {/* Chat Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onChat(document);
+            }}
+            className="p-2 rounded-lg hover:bg-primary/20 text-gray-400 hover:text-primary 
+                     transition-colors"
+            title="Chat with this document"
+          >
+            <MessageSquare className="w-5 h-5" />
+          </button>
+          
+          {/* Delete Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(document.doc_id);
+            }}
+            className="p-2 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 
+                     transition-colors"
+            title="Delete document"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Stats Grid */}

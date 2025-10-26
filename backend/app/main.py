@@ -1,19 +1,22 @@
 from app.utils.chromadb_patch import patch_chromadb_telemetry
 patch_chromadb_telemetry()
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer
 import os
 import shutil
-from typing import List
+from typing import List, Optional
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.models import *
 from app.services.document_processor import DocumentProcessor
 from app.services.embeddings import EmbeddingService
 from app.services.qa_engine import QAEngine
+from app.services.auth import auth_service, get_current_user, get_current_user_optional
+from app.services.database import db_service
 
 # Initialize FastAPI app
 app = FastAPI(title="Document QA System", version="1.0.0")
@@ -32,25 +35,120 @@ doc_processor = DocumentProcessor()
 embedding_service = EmbeddingService()
 qa_engine = QAEngine()
 
-# In-memory storage (for demo - use DB in production)
-documents_store = {}
-conversations_store = {}
+# Database collections
+documents_collection = None
+chat_history_collection = None
 
 # Create uploads directory
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# JWT settings
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database connection on startup"""
+    try:
+        await db_service.connect()
+        await auth_service.initialize()
+        
+        # Initialize collections
+        global documents_collection, chat_history_collection
+        documents_collection = db_service.get_collection("documents")
+        chat_history_collection = db_service.get_collection("chat_history")
+        
+        print("🚀 Application started successfully")
+    except Exception as e:
+        print(f"❌ Failed to start application: {e}")
+        raise
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up on shutdown"""
+    await db_service.disconnect()
+    print("🛑 Application shutdown complete")
+
 @app.get("/")
 async def root():
     return {"message": "Document QA System API", "version": "1.0.0"}
 
+# Authentication endpoints
+@app.post("/api/auth/signup")
+async def signup(user: UserCreate):
+    """Create a new user account"""
+    try:
+        new_user = await auth_service.create_user(user)
+        
+        # Create access token for the new user
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = auth_service.create_access_token(
+            data={"sub": new_user.email}, expires_delta=access_token_expires
+        )
+        
+        return {
+            "user": new_user,
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error creating user: {str(e)}")
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(user_credentials: UserLogin):
+    """Authenticate user and return access token"""
+    try:
+        user = await auth_service.authenticate_user(
+            user_credentials.email, 
+            user_credentials.password
+        )
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = auth_service.create_access_token(
+            data={"sub": user.email}, expires_delta=access_token_expires
+        )
+        
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error during login: {str(e)}")
+
+@app.get("/api/auth/me", response_model=User)
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current user information"""
+    return current_user
+
 @app.post("/api/upload", response_model=DocumentUploadResponse)
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
     """Upload and process a document"""
     try:
         # Validate file
         if not file.filename.endswith(('.pdf', '.txt')):
             raise HTTPException(400, "Only PDF and TXT files are supported")
+        
+        # Check file size (50MB limit)
+        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB in bytes
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(400, f"File size exceeds 50MB limit. Current size: {len(file_content) / (1024*1024):.1f}MB")
+        
+        # Reset file pointer for processing
+        await file.seek(0)
         
         # Save file
         file_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
@@ -63,14 +161,18 @@ async def upload_document(file: UploadFile = File(...)):
         # Embed chunks
         embedding_service.embed_chunks(result["chunks"], result["doc_id"])
         
-        # Store metadata
-        documents_store[result["doc_id"]] = {
+        # Store document in MongoDB
+        document_doc = {
+            "doc_id": result["doc_id"],
+            "user_id": current_user.id,
             "filename": result["filename"],
-            "upload_time": datetime.now(),
             "file_path": file_path,
-            "metadata": result["metadata"],
-            "total_pages": result["total_pages"]
+            "upload_time": datetime.utcnow(),
+            "total_pages": result["total_pages"],
+            "metadata": result["metadata"]
         }
+        
+        await documents_collection.insert_one(document_doc)
         
         return DocumentUploadResponse(
             doc_id=result["doc_id"],
@@ -87,12 +189,16 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(500, f"Error processing document: {str(e)}")
 
 @app.post("/api/ask", response_model=Answer)
-async def ask_question(request: QuestionRequest):
+async def ask_question(request: QuestionRequest, current_user: User = Depends(get_current_user)):
     """Ask a question about uploaded documents"""
     try:
-        # Validate documents exist
+        # Validate documents exist and belong to user
         for doc_id in request.doc_ids:
-            if doc_id not in documents_store:
+            doc_doc = await documents_collection.find_one({
+                "doc_id": doc_id,
+                "user_id": current_user.id
+            })
+            if not doc_doc:
                 raise HTTPException(404, f"Document {doc_id} not found")
         
         # Search for relevant chunks
@@ -120,39 +226,63 @@ async def ask_question(request: QuestionRequest):
         raise HTTPException(500, f"Error generating answer: {str(e)}")
 
 @app.get("/api/documents", response_model=List[DocumentMetadata])
-async def list_documents():
-    """List all uploaded documents"""
-    documents = []
-    for doc_id, doc_info in documents_store.items():
-        documents.append(DocumentMetadata(
-            doc_id=doc_id,
-            filename=doc_info["filename"],
-            upload_time=doc_info["upload_time"],
-            total_pages=doc_info["total_pages"],
-            total_chunks=doc_info["metadata"]["total_chunks"],
-            summary=doc_info["metadata"]["summary"],
-            key_topics=doc_info["metadata"]["key_topics"]
-        ))
-    return documents
+async def list_documents(current_user: User = Depends(get_current_user)):
+    """List all uploaded documents for the current user"""
+    try:
+        # Query documents for the current user
+        cursor = documents_collection.find({"user_id": current_user.id}).sort("upload_time", -1)
+        documents = []
+        
+        async for doc in cursor:
+            documents.append(DocumentMetadata(
+                doc_id=doc["doc_id"],
+                filename=doc["filename"],
+                upload_time=doc["upload_time"],
+                total_pages=doc["total_pages"],
+                total_chunks=doc["metadata"]["total_chunks"],
+                summary=doc["metadata"]["summary"],
+                key_topics=doc["metadata"]["key_topics"],
+                estimated_reading_time=doc["metadata"]["estimated_reading_time"],
+                complexity_score=doc["metadata"]["complexity_score"]
+            ))
+        
+        return documents
+    except Exception as e:
+        raise HTTPException(500, f"Error loading documents: {str(e)}")
 
 @app.delete("/api/documents/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, current_user: User = Depends(get_current_user)):
     """Delete a document"""
-    if doc_id not in documents_store:
-        raise HTTPException(404, "Document not found")
+    try:
+        # Find document in MongoDB
+        doc_doc = await documents_collection.find_one({
+            "doc_id": doc_id,
+            "user_id": current_user.id
+        })
+        
+        if not doc_doc:
+            raise HTTPException(404, "Document not found")
+        
+        # Delete from vector store
+        embedding_service.delete_document(doc_id)
+        
+        # Delete file
+        file_path = doc_doc["file_path"]
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        
+        # Remove from MongoDB
+        await documents_collection.delete_one({
+            "doc_id": doc_id,
+            "user_id": current_user.id
+        })
+        
+        return {"message": "Document deleted successfully"}
     
-    # Delete from vector store
-    embedding_service.delete_document(doc_id)
-    
-    # Delete file
-    file_path = documents_store[doc_id]["file_path"]
-    if os.path.exists(file_path):
-        os.remove(file_path)
-    
-    # Remove from store
-    del documents_store[doc_id]
-    
-    return {"message": "Document deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error deleting document: {str(e)}")
 
 @app.post("/api/compare")
 async def compare_documents(request: ComparisonRequest):
@@ -177,25 +307,36 @@ async def compare_documents(request: ComparisonRequest):
         raise HTTPException(500, f"Error comparing documents: {str(e)}")
 
 @app.get("/api/suggestions/{doc_id}")
-async def get_question_suggestions(doc_id: str):
+async def get_question_suggestions(doc_id: str, current_user: User = Depends(get_current_user)):
     """Get suggested questions for a document"""
-    if doc_id not in documents_store:
-        raise HTTPException(404, "Document not found")
+    try:
+        # Find document in MongoDB
+        doc_doc = await documents_collection.find_one({
+            "doc_id": doc_id,
+            "user_id": current_user.id
+        })
+        
+        if not doc_doc:
+            raise HTTPException(404, "Document not found")
+        
+        topics = doc_doc["metadata"]["key_topics"]
+        filename = doc_doc["filename"]
+        
+        # Generate better questions based on document content
+        suggestions = [
+            f"What are the main topics covered in {filename}?",
+            f"Can you summarize the key points about {topics[0] if topics else 'this document'}?",
+            "What are the most important findings or conclusions?",
+            f"Explain the concept of {topics[1] if len(topics) > 1 else 'the main topic'} in detail.",
+            f"How does {topics[2] if len(topics) > 2 else 'this document'} relate to {topics[0] if topics else 'the main theme'}?"
+        ]
+        
+        return {"suggestions": suggestions}
     
-    doc_info = documents_store[doc_id]
-    topics = doc_info["metadata"]["key_topics"]
-    filename = doc_info["filename"]
-    
-    # Generate better questions based on document content
-    suggestions = [
-        f"What are the main topics covered in {filename}?",
-        f"Can you summarize the key points about {topics[0] if topics else 'this document'}?",
-        "What are the most important findings or conclusions?",
-        f"Explain the concept of {topics[1] if len(topics) > 1 else 'the main topic'} in detail.",
-        f"How does {topics[2] if len(topics) > 2 else 'this document'} relate to {topics[0] if topics else 'the main theme'}?"
-    ]
-    
-    return {"suggestions": suggestions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Error getting suggestions: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

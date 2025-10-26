@@ -4,9 +4,11 @@ import { BarChart3, TrendingUp, FileText, Clock } from 'lucide-react';
 const DocumentDashboard = ({ documents }) => {
   if (documents.length === 0) return null;
 
-  const totalPages = documents.reduce((sum, doc) => sum + doc.total_pages, 0);
-  const totalReadingTime = documents.reduce((sum, doc) => sum + doc.estimated_reading_time, 0);
-  const avgComplexity = documents.reduce((sum, doc) => sum + doc.complexity_score, 0) / documents.length;
+  const totalPages = documents.reduce((sum, doc) => sum + (doc.total_pages || 0), 0);
+  const totalReadingTime = documents.reduce((sum, doc) => sum + (doc.estimated_reading_time || 0), 0);
+  const avgComplexity = documents.length > 0 
+    ? documents.reduce((sum, doc) => sum + (doc.complexity_score || 0), 0) / documents.length 
+    : 0;
 
   const stats = [
     {
@@ -29,7 +31,7 @@ const DocumentDashboard = ({ documents }) => {
       },
     {
       label: 'Avg Complexity',
-      value: `${(avgComplexity * 100).toFixed(0)}%`,
+      value: `${Math.round(avgComplexity * 100)}%`,
       icon: TrendingUp,
       color: 'from-orange-500 to-red-500'
     }
